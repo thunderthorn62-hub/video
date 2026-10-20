@@ -9,3 +9,4 @@ itsdangerous>=2.2
 yt-dlp[default]
 Authlib>=1.3
 httpx>=0.27
+pymongo[srv]
