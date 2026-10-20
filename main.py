@@ -98,15 +98,44 @@ async def used_today(uid):
     return await db.downloads.count_documents({'user_id': uid, 'created_at': {'$gte': start}, 'status': 'success'})
 
 def get_info(url):
-    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True, 'noplaylist': True, 'socket_timeout': 20}) as ydl:
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': False,
+        'skip_download': True,
+        'noplaylist': True,
+        'socket_timeout': 30,
+        'retries': 3,
+        'verbose': True,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         x = ydl.extract_info(url, download=False)
-    return {'title': x.get('title') or 'Untitled', 'duration': x.get('duration'), 'thumbnail': x.get('thumbnail'), 'extractor': x.get('extractor_key'), 'webpage_url': x.get('webpage_url') or url, 'filesize': x.get('filesize') or x.get('filesize_approx')}
+
+    return {
+        'title': x.get('title') or 'Untitled',
+        'duration': x.get('duration'),
+        'thumbnail': x.get('thumbnail'),
+        'extractor': x.get('extractor_key'),
+        'webpage_url': x.get('webpage_url') or url,
+        'filesize': x.get('filesize') or x.get('filesize_approx')
+    }
 
 def download_sync(jid, url, fmt, quality):
-    job = jobs[jid]; template = str(DOWNLOAD_DIR / f'{jid}.%(ext)s')
-    opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'outtmpl': template,
-            'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(), 'socket_timeout': 30, 'retries': 2,
-            'max_filesize': MAX_FILE_MB * 1024 * 1024, 'overwrites': True}
+    job = jobs[jid]
+    template = str(DOWNLOAD_DIR / f'{jid}.%(ext)s')
+
+    opts = {
+        'quiet': True,
+        'no_warnings': False,
+        'noplaylist': True,
+        'outtmpl': template,
+        'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
+        'socket_timeout': 30,
+        'retries': 3,
+        'max_filesize': MAX_FILE_MB * 1024 * 1024,
+        'overwrites': True,
+        'verbose': True,
+    }
     if fmt == 'mp3':
         opts.update({'format': 'bestaudio/best', 'postprocessors': [{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}]})
     elif fmt == 'webm': opts.update({'format':'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best','merge_output_format':'webm'})
