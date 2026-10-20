@@ -136,10 +136,24 @@ async def run_job(jid, user, url, fmt, quality):
         await db.downloads.insert_one({'user_id': user['_id'], 'job_id': jid, 'created_at': now(), 'status':'success', 'format':fmt, 'title':j.get('title')})
     await db.jobs.update_one({'_id':jid}, {'$set':{'status':j.get('status'), 'title':j.get('title'), 'error':j.get('error'), 'filename':j.get('filename'), 'size':j.get('size'), 'updated_at':now()}}, upsert=True)
 
-@app.get('/', response_class=HTMLResponse)
+from pathlib import Path
+from fastapi.responses import HTMLResponse
+
+BASE_DIR = Path(__file__).resolve().parent
+
+@app.get("/", response_class=HTMLResponse)
 async def home():
-    # Minimal fallback UI. Replace with your original HTML if you need its exact existing design.
-    return '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VidNova</title><style>body{background:#0b1020;color:#f5f7ff;font:16px system-ui;display:grid;place-items:center;min-height:100vh}.card{width:min(560px,90vw);padding:28px;border:1px solid #27304a;border-radius:22px;background:#121a2e}input,select,button{box-sizing:border-box;width:100%;padding:13px;margin:7px 0;border-radius:10px;border:1px solid #34405e;background:#0b1020;color:white}button{background:#7167ff;border:0;font-weight:bold}#out{overflow-wrap:anywhere}</style><main class="card"><h1>VidNova</h1><p>Video and audio downloader</p><input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Password (8+ characters)"><button onclick="auth('/api/register')">Create account</button><button onclick="auth('/api/login')">Sign in</button><hr><input id="url" type="url" placeholder="Video URL"><select id="format"><option>mp4</option><option>mp3</option><option>webm</option></select><select id="quality"><option value="best">Best quality</option><option>1080</option><option>720</option><option>480</option><option>360</option></select><button onclick="start()">Download</button><p id="out"></p><script>async function post(p,d){let r=await fetch(p,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}),j=await r.json();if(!r.ok)throw Error(j.detail||'Request failed');return j}async function auth(p){try{await post(p,{email:email.value,password:password.value});out.textContent='Signed in.'}catch(e){out.textContent=e.message}}async function start(){try{let j=await post('/api/download',{url:url.value,format:format.value,quality:quality.value});out.textContent='Preparing…';for(let i=0;i<300;i++){await new Promise(r=>setTimeout(r,1500));let r=await fetch('/api/jobs/'+j.job_id,{credentials:'same-origin'}),s=await r.json();if(s.status==='completed'){out.innerHTML='<a style="color:#b8b0ff" href="/api/jobs/'+j.job_id+'/file">Download file</a>';return}if(s.status==='failed'){out.textContent=s.error;return}}}catch(e){out.textContent=e.message}}</script></main></html>'''
+    html_file = BASE_DIR / "index.html"
+
+    if not html_file.exists():
+        return HTMLResponse(
+            "<h1>VidNova</h1><p>index.html not found</p>",
+            status_code=500
+        )
+
+    return HTMLResponse(
+        html_file.read_text(encoding="utf-8")
+    )
 
 @app.get('/health')
 async def health():
