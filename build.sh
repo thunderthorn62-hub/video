@@ -3,14 +3,20 @@ set -e
 
 echo "=== Installing Deno ==="
 
-curl -fsSL https://deno.land/install.sh | sh
+mkdir -p "$PWD/.deno-bin"
 
-export DENO_INSTALL="$HOME/.deno"
-export PATH="$DENO_INSTALL/bin:$PATH"
+curl -fsSL https://deno.land/install.sh | sh -s -- -y
+
+if [ ! -x "$HOME/.deno/bin/deno" ]; then
+    echo "ERROR: Deno installation failed"
+    exit 1
+fi
+
+cp "$HOME/.deno/bin/deno" "$PWD/.deno-bin/deno"
+chmod +x "$PWD/.deno-bin/deno"
 
 echo "=== Checking Deno ==="
-which deno
-deno --version
+./.deno-bin/deno --version
 
 echo "=== Installing Python dependencies ==="
 python -m pip install --upgrade pip
