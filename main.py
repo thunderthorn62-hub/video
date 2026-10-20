@@ -1,4 +1,4 @@
-import os, re, uuid, hmac, hashlib, secrets, asyncio, ipaddress, socket
+import os, re, uuid, hmac, hashlib, secrets, asyncio, ipaddress, socket, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -97,32 +97,73 @@ async def used_today(uid):
     start = now().replace(hour=0, minute=0, second=0, microsecond=0)
     return await db.downloads.count_documents({'user_id': uid, 'created_at': {'$gte': start}, 'status': 'success'})
 
+def create_youtube_cookie_file():
+    cookies = os.getenv("YOUTUBE_COOKIES", "").strip()
+
+    if not cookies:
+        return None
+
+    fd, path = tempfile.mkstemp(
+        prefix="vidnova_cookies_",
+        suffix=".txt",
+        dir="/tmp"
+    )
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cookies)
+        os.chmod(path, 0o600)
+        return path
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+
 def get_info(url):
+    cookie_file = create_youtube_cookie_file()
+
     ydl_opts = {
         'quiet': True,
         'no_warnings': False,
         'skip_download': True,
         'noplaylist': True,
         'socket_timeout': 30,
-        'retries': 3,
+        'retries': 2,
         'verbose': True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        x = ydl.extract_info(url, download=False)
+    if cookie_file:
+        ydl_opts['cookiefile'] = cookie_file
 
-    return {
-        'title': x.get('title') or 'Untitled',
-        'duration': x.get('duration'),
-        'thumbnail': x.get('thumbnail'),
-        'extractor': x.get('extractor_key'),
-        'webpage_url': x.get('webpage_url') or url,
-        'filesize': x.get('filesize') or x.get('filesize_approx')
-    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            x = ydl.extract_info(url, download=False)
+
+        return {
+            'title': x.get('title') or 'Untitled',
+            'duration': x.get('duration'),
+            'thumbnail': x.get('thumbnail'),
+            'extractor': x.get('extractor_key'),
+            'webpage_url': x.get('webpage_url') or url,
+            'filesize': x.get('filesize') or x.get('filesize_approx')
+        }
+    finally:
+        if cookie_file:
+            try:
+                os.unlink(cookie_file)
+            except OSError:
+                pass
 
 def download_sync(jid, url, fmt, quality):
     job = jobs[jid]
     template = str(DOWNLOAD_DIR / f'{jid}.%(ext)s')
+    cookie_file = create_youtube_cookie_file()
 
     opts = {
         'quiet': True,
@@ -131,30 +172,86 @@ def download_sync(jid, url, fmt, quality):
         'outtmpl': template,
         'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
         'socket_timeout': 30,
-        'retries': 3,
+        'retries': 2,
         'max_filesize': MAX_FILE_MB * 1024 * 1024,
         'overwrites': True,
         'verbose': True,
     }
+
+    if cookie_file:
+        opts['cookiefile'] = cookie_file
+
     if fmt == 'mp3':
-        opts.update({'format': 'bestaudio/best', 'postprocessors': [{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}]})
-    elif fmt == 'webm': opts.update({'format':'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best','merge_output_format':'webm'})
-    else: opts.update({'format':'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best','merge_output_format':'mp4'})
-    if quality in ('360','480','720','1080') and fmt != 'mp3': opts['format'] = f'best[height<={quality}]/best'
+        opts.update({
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192'
+            }]
+        })
+    elif fmt == 'webm':
+        opts.update({
+            'format': 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best',
+            'merge_output_format': 'webm'
+        })
+    else:
+        opts.update({
+            'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+            'merge_output_format': 'mp4'
+        })
+
+    if quality in ('360', '480', '720', '1080') and fmt != 'mp3':
+        opts['format'] = f'best[height<={quality}]/best'
+
     try:
         job['status'] = 'processing'
-        with yt_dlp.YoutubeDL(opts) as ydl: info = ydl.extract_info(url, download=True)
-        files = [p for p in DOWNLOAD_DIR.glob(f'{jid}.*') if p.is_file() and p.suffix not in ('.part','.ytdl')]
-        if not files: raise RuntimeError('Downloaded file was not found.')
-        file = max(files, key=lambda p:p.stat().st_size)
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+
+        files = [
+            p for p in DOWNLOAD_DIR.glob(f'{jid}.*')
+            if p.is_file() and p.suffix not in ('.part', '.ytdl')
+        ]
+
+        if not files:
+            raise RuntimeError('Downloaded file was not found.')
+
+        file = max(files, key=lambda p: p.stat().st_size)
+
         if file.stat().st_size > MAX_FILE_MB * 1024 * 1024:
-            file.unlink(missing_ok=True); raise RuntimeError(f'File exceeds {MAX_FILE_MB} MB limit.')
-        job.update(status='completed', title=info.get('title') or 'download', filename=file.name, size=file.stat().st_size, file_path=str(file), _finished=True)
+            file.unlink(missing_ok=True)
+            raise RuntimeError(f'File exceeds {MAX_FILE_MB} MB limit.')
+
+        job.update(
+            status='completed',
+            title=info.get('title') or 'download',
+            filename=file.name,
+            size=file.stat().st_size,
+            file_path=str(file),
+            _finished=True
+        )
+
     except Exception as e:
         for p in DOWNLOAD_DIR.glob(f'{jid}.*'):
-            try: p.unlink(missing_ok=True)
-            except Exception: pass
-        job.update(status='failed', error=str(e)[:400], _finished=True)
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        job.update(
+            status='failed',
+            error=str(e)[:400],
+            _finished=True
+        )
+
+    finally:
+        if cookie_file:
+            try:
+                os.unlink(cookie_file)
+            except OSError:
+                pass
 
 async def run_job(jid, user, url, fmt, quality):
     if await used_today(user['_id']) >= DAILY_LIMIT:
