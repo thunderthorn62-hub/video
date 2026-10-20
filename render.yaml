@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: vidnova
+    runtime: python
+    plan: starter
+    buildCommand: apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vidnova-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: MAX_FILE_MB
+        value: "500"
+
+databases:
+  - name: vidnova-db
+    plan: free
